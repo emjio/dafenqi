@@ -1,0 +1,5 @@
+{
+  "name": "达芬奇密码",
+  "description": "与 AI 进行策略逻辑推理对决。在对手猜出你的密码之前，先猜出他们的隐藏密码。",
+  "requestFramePermissions": []
+}
