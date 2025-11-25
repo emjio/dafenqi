@@ -570,7 +570,7 @@ const App: React.FC = () => {
                <div key={tile.id} className="transition-all duration-500 flex flex-col items-center">
                   <TileComponent 
                     tile={tile} 
-                    isHidden={true} 
+                    isHidden={!gameState.winner} 
                     isSelectable={gameState.turn === 'player' && gameState.phase === 'guess' && !tile.isRevealed}
                     onClick={() => handleAiTileClick(index)}
                   />
