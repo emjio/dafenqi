@@ -11,16 +11,19 @@ export interface Tile {
 
 export type PlayerType = 'player' | 'ai';
 
+export type Difficulty = 'easy' | 'medium' | 'hard';
+
 export interface GameState {
   playerHand: Tile[];
   aiHand: Tile[];
   deck: Tile[];
   turn: PlayerType;
-  phase: 'setup' | 'draw' | 'placement' | 'guess' | 'decision' | 'gameover'; // Added 'placement'
+  phase: 'setup' | 'draw' | 'placement' | 'guess' | 'decision' | 'gameover';
   winner: PlayerType | null;
   logs: GameLogEntry[];
   lastGuessedTileId: string | null;
   pendingTile: Tile | null; // The tile waiting to be placed
+  difficulty: Difficulty;
 }
 
 export interface GameLogEntry {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  GameState, Tile, PlayerType, GameLogEntry, TileColor 
+  GameState, Tile, PlayerType, GameLogEntry, TileColor, Difficulty 
 } from './types';
 import { 
   createDeck, drawTile, sortHand, TOTAL_NUMBERS 
@@ -9,7 +9,7 @@ import { getAiMove } from './services/geminiService';
 import { TileComponent } from './components/TileComponent';
 import { GuessModal } from './components/GuessModal';
 import { LogPanel } from './components/LogPanel';
-import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords } from 'lucide-react';
+import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield } from 'lucide-react';
 
 const INITIAL_HAND_SIZE = 4;
 
@@ -25,6 +25,7 @@ const App: React.FC = () => {
     logs: [],
     lastGuessedTileId: null,
     pendingTile: null,
+    difficulty: 'medium'
   });
 
   const [guessModalOpen, setGuessModalOpen] = useState(false);
@@ -49,6 +50,10 @@ const App: React.FC = () => {
         type
       }]
     }));
+  };
+
+  const setDifficulty = (diff: Difficulty) => {
+    setGameState(prev => ({ ...prev, difficulty: diff }));
   };
 
   const startGame = () => {
@@ -77,7 +82,8 @@ const App: React.FC = () => {
     const sortedAiHand = sortHand(aiHand);
     const remainingDeck = deck; 
 
-    setGameState({
+    setGameState(prev => ({
+      ...prev,
       playerHand: sortedPlayerHand,
       aiHand: sortedAiHand,
       deck: remainingDeck,
@@ -87,9 +93,9 @@ const App: React.FC = () => {
       logs: [],
       lastGuessedTileId: null,
       pendingTile: null
-    });
+    }));
     
-    addLog('player', '游戏开始。牌已分发。', 'info');
+    addLog('player', `游戏开始。难度: ${gameState.difficulty === 'easy' ? '初级' : gameState.difficulty === 'medium' ? '中级' : '高级'}`, 'info');
     triggerTurnNotification('player');
   };
 
@@ -151,7 +157,7 @@ const App: React.FC = () => {
 
     if (gameState.turn === 'player') {
       if (tile.value === -1) {
-        addLog('player', `摸到了一张 ${getColorName(tile.color)} 特殊牌 "-"！请选择放置位置。`, 'info');
+        // Prompt is handled by the UI overlay in render
         setGameState(prev => ({
           ...prev,
           deck: newDeck,
@@ -333,7 +339,8 @@ const App: React.FC = () => {
       gameState.playerHand,
       gameState.deck.length,
       fullLogHistory,
-      canPass
+      canPass,
+      gameState.difficulty
     );
 
     setIsAiThinking(false);
@@ -396,25 +403,44 @@ const App: React.FC = () => {
   if (gameState.phase === 'setup') {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
-         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-8 text-center brand-font tracking-tighter drop-shadow-glow">
+         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow">
             达芬奇密码
          </h1>
          <div className="max-w-md text-center text-slate-400 mb-8 space-y-4">
            <p>与机器进行一场智慧的较量。</p>
            <p>在对手破解你的密码之前，推断出他们手牌中的隐藏数字。</p>
-           <div className="bg-slate-800 p-4 rounded-lg text-sm text-left border border-slate-700">
-             <h3 className="font-bold text-slate-200 mb-2">规则:</h3>
-             <ul className="list-disc pl-4 space-y-1">
-               <li>有黑色和白色牌，数字为 0-11。</li>
-               <li><strong className="text-amber-500">新增规则:</strong> 包含特殊牌 "-"，可放置在任意位置。</li>
-               <li>手牌通常按数字大小排列，但 "-" 是例外。</li>
-               <li>如果数字相同，黑牌放在左边（视为较小）。</li>
-             </ul>
+           
+           <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl mt-6">
+              <h3 className="text-white font-bold mb-4 flex items-center justify-center gap-2">
+                <Shield size={18} className="text-indigo-400" /> 选择难度
+              </h3>
+              <div className="flex gap-3 justify-center">
+                 {(['easy', 'medium', 'hard'] as Difficulty[]).map((level) => (
+                   <button
+                     key={level}
+                     onClick={() => setDifficulty(level)}
+                     className={`
+                       px-4 py-2 rounded-lg font-bold capitalize transition-all border-2
+                       ${gameState.difficulty === level 
+                         ? 'bg-amber-500 text-black border-amber-500 scale-105 shadow-md' 
+                         : 'bg-slate-700 text-slate-400 border-slate-600 hover:border-slate-500'}
+                     `}
+                   >
+                     {{easy: '初级', medium: '中级', hard: '高级'}[level]}
+                   </button>
+                 ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-3">
+                {gameState.difficulty === 'easy' && "AI 比较保守，容易犹豫。"}
+                {gameState.difficulty === 'medium' && "AI 逻辑严密，攻守平衡。"}
+                {gameState.difficulty === 'hard' && "AI 极具侵略性，利用高级排除法。"}
+              </p>
            </div>
          </div>
+
          <button 
            onClick={startGame}
-           className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 px-12 rounded-full text-xl shadow-lg transition-all hover:scale-105 flex items-center gap-3"
+           className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 px-12 rounded-full text-xl shadow-lg transition-all hover:scale-105 flex items-center gap-3 mt-4"
          >
            <Play size={24} fill="currentColor" /> 进入圣殿
          </button>
@@ -453,7 +479,9 @@ const App: React.FC = () => {
         
         {/* Header */}
         <header className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-20 pointer-events-none">
-          <div className="brand-font text-amber-500/50 text-xl font-bold pointer-events-auto select-none">达芬奇密码</div>
+          <div className="brand-font text-amber-500/50 text-xl font-bold pointer-events-auto select-none">
+            达芬奇密码 <span className="text-xs text-slate-600 ml-2 border border-slate-700 px-2 py-0.5 rounded-full">{{easy: '初级', medium: '中级', hard: '高级'}[gameState.difficulty]}</span>
+          </div>
           <div className="flex items-center gap-4 pointer-events-auto">
              <div className="bg-slate-900/80 px-4 py-2 rounded-full border border-slate-700 text-sm font-mono text-slate-400">
                剩余牌数: {gameState.deck.length}
@@ -499,36 +527,56 @@ const App: React.FC = () => {
 
         {/* Placement Phase Overlay */}
         {gameState.phase === 'placement' && gameState.pendingTile && (
-          <div className="absolute inset-0 z-40 bg-black/80 flex flex-col items-center justify-center animate-fadeIn p-4">
-            <h2 className="text-2xl font-bold text-amber-500 mb-6">选择特殊牌的位置</h2>
-            <div className="flex items-center gap-2 overflow-x-auto p-4 max-w-full">
-              {/* Slot 0 */}
-              <button onClick={() => handlePlacement(0)} className="group flex flex-col items-center gap-2 mx-1">
-                 <div className="w-8 h-8 rounded-full border-2 border-dashed border-slate-500 group-hover:border-amber-500 group-hover:bg-amber-500/20 flex items-center justify-center transition-colors">
-                   <ArrowDown size={16} className="text-slate-500 group-hover:text-amber-500" />
-                 </div>
+          <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center animate-fadeIn p-4">
+            
+            <div className="mb-8 text-center animate-slideDown">
+               <h2 className="text-3xl md:text-4xl font-bold text-amber-500 mb-3 brand-font drop-shadow-lg">
+                 摸到了特殊牌 “-”
+               </h2>
+               <p className="text-slate-300 text-lg bg-black/40 px-6 py-2 rounded-full inline-block border border-slate-700 mb-2">
+                 请点击下方的 <span className="text-amber-500 font-bold">↓</span> 箭头，将其插入到手牌的任意位置
+               </p>
+               <p className="flex items-center justify-center gap-2 text-indigo-400 text-sm font-semibold opacity-90">
+                 <EyeOff size={16} /> 此操作对对手不可见 (AI 不会知道你放哪了)
+               </p>
+            </div>
+
+            {/* The Pending Tile */}
+            <div className="mb-10 p-6 bg-gradient-to-b from-amber-500/20 to-transparent rounded-full border border-amber-500/30 shadow-[0_0_50px_rgba(245,158,11,0.2)] animate-float">
+               <TileComponent tile={gameState.pendingTile} isHidden={false} />
+            </div>
+
+            {/* Insertion Zone */}
+            <div className="flex items-center gap-0 overflow-x-auto p-8 max-w-full bg-slate-900/60 rounded-2xl border border-slate-700/50 shadow-2xl backdrop-blur-sm">
+              
+              {/* Insert Slot 0 */}
+              <button 
+                onClick={() => handlePlacement(0)} 
+                className="group relative w-12 h-32 flex items-center justify-center mx-1 transition-all"
+              >
+                <div className="absolute inset-y-4 left-1/2 w-0.5 -translate-x-1/2 bg-slate-700 group-hover:bg-amber-500/50 transition-colors" />
+                <div className="z-10 w-10 h-10 rounded-full bg-slate-800 border-2 border-slate-600 group-hover:border-amber-500 group-hover:bg-amber-500 text-slate-400 group-hover:text-black flex items-center justify-center transition-all shadow-lg transform group-hover:scale-110">
+                  <ArrowDown size={20} />
+                </div>
               </button>
 
               {gameState.playerHand.map((tile, i) => (
                 <React.Fragment key={tile.id}>
-                  <div className="opacity-50 scale-90">
+                  <div className="opacity-90 scale-100 hover:scale-105 transition-transform duration-300">
                     <TileComponent tile={tile} isHidden={false} />
                   </div>
-                  {/* Slot i+1 */}
-                  <button onClick={() => handlePlacement(i + 1)} className="group flex flex-col items-center gap-2 mx-1">
-                     <div className="w-8 h-8 rounded-full border-2 border-dashed border-slate-500 group-hover:border-amber-500 group-hover:bg-amber-500/20 flex items-center justify-center transition-colors">
-                       <ArrowDown size={16} className="text-slate-500 group-hover:text-amber-500" />
+                  {/* Insert Slot i+1 */}
+                  <button 
+                    onClick={() => handlePlacement(i + 1)} 
+                    className="group relative w-12 h-32 flex items-center justify-center mx-1 transition-all"
+                  >
+                     <div className="absolute inset-y-4 left-1/2 w-0.5 -translate-x-1/2 bg-slate-700 group-hover:bg-amber-500/50 transition-colors" />
+                     <div className="z-10 w-10 h-10 rounded-full bg-slate-800 border-2 border-slate-600 group-hover:border-amber-500 group-hover:bg-amber-500 text-slate-400 group-hover:text-black flex items-center justify-center transition-all shadow-lg transform group-hover:scale-110">
+                       <ArrowDown size={20} />
                      </div>
                   </button>
                 </React.Fragment>
               ))}
-            </div>
-            
-            <div className="mt-8 flex flex-col items-center">
-              <p className="text-slate-300 mb-2">待放置:</p>
-              <div className="scale-110">
-                 <TileComponent tile={gameState.pendingTile} isHidden={false} />
-              </div>
             </div>
           </div>
         )}
