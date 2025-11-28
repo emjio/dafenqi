@@ -1,3 +1,4 @@
+
 export type TileColor = 'black' | 'white';
 
 export interface Tile {
@@ -13,6 +14,8 @@ export type PlayerType = 'player' | 'ai';
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
+export type AiProvider = 'gemini' | 'openai';
+
 export interface GameState {
   playerHand: Tile[];
   aiHand: Tile[];
@@ -24,6 +27,10 @@ export interface GameState {
   lastGuessedTileId: string | null;
   pendingTile: Tile | null; // The tile waiting to be placed
   difficulty: Difficulty;
+  aiConfig: {
+    provider: AiProvider;
+    apiKey: string;
+  };
 }
 
 export interface GameLogEntry {

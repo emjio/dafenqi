@@ -1,9 +1,8 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
 import { Tile, AiGuessResult, Difficulty } from "../types";
 import { TOTAL_NUMBERS } from "../utils/gameLogic";
 
-export const getGeminiMove = async (
+export const getOpenAiMove = async (
   apiKey: string,
   aiHand: Tile[],
   playerHand: Tile[],
@@ -12,9 +11,6 @@ export const getGeminiMove = async (
   canPass: boolean = false,
   difficulty: Difficulty = 'medium'
 ): Promise<AiGuessResult> => {
-
-  // Initialize client with the user-provided key
-  const ai = new GoogleGenAI({ apiKey });
 
   const aiHandDescription = aiHand.map(t => `${t.value === -1 ? '-' : t.value}${t.color === 'black' ? '黑' : '白'}`).join(', ');
   
@@ -98,31 +94,38 @@ export const getGeminiMove = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            targetIndex: { type: Type.INTEGER },
-            guessValue: { type: Type.INTEGER },
-            reasoning: { type: Type.STRING },
-            chatMessage: { type: Type.STRING }
-          },
-          required: ['targetIndex', 'guessValue', 'reasoning', 'chatMessage']
-        }
-      }
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o", // Default to gpt-4o, falls back to what the user has access to if invalid but standard keys usually work with 4o or 3.5-turbo
+        messages: [
+          { role: "system", content: "You are a strategic game AI. You must output valid JSON." },
+          { role: "user", content: prompt }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.7
+      })
     });
 
-    const text = response.text;
-    if (!text) throw new Error("Empty response from AI");
+    const data = await response.json();
     
-    return JSON.parse(text) as AiGuessResult;
+    if (data.error) {
+      throw new Error(`OpenAI API Error: ${data.error.message}`);
+    }
+
+    if (!data.choices || data.choices.length === 0) {
+       throw new Error("OpenAI API returned no choices.");
+    }
+
+    const content = data.choices[0].message.content;
+    return JSON.parse(content) as AiGuessResult;
 
   } catch (error) {
-    console.error("AI Move Error:", error);
-    throw error; // Re-throw to be handled by the abstraction layer fallback
+    console.error("OpenAI Move Error:", error);
+    throw error;
   }
 };

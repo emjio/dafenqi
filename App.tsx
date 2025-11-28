@@ -1,20 +1,25 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
-  GameState, Tile, PlayerType, GameLogEntry, TileColor, Difficulty 
+  GameState, Tile, PlayerType, GameLogEntry, TileColor, Difficulty, AiProvider 
 } from './types';
 import { 
   createDeck, drawTile, sortHand, TOTAL_NUMBERS 
 } from './utils/gameLogic';
-import { getAiMove } from './services/geminiService';
+import { getAiMove } from './services/aiService';
 import { TileComponent } from './components/TileComponent';
 import { GuessModal } from './components/GuessModal';
 import { LogPanel } from './components/LogPanel';
+import { SetupScreen } from './components/SetupScreen';
 import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield } from 'lucide-react';
 
 const INITIAL_HAND_SIZE = 4;
 
 const App: React.FC = () => {
   // --- State ---
+  // Initial phase is now 'setup' before we even show the main menu
+  const [isSetupComplete, setIsSetupComplete] = useState(false);
+  
   const [gameState, setGameState] = useState<GameState>({
     playerHand: [],
     aiHand: [],
@@ -25,7 +30,11 @@ const App: React.FC = () => {
     logs: [],
     lastGuessedTileId: null,
     pendingTile: null,
-    difficulty: 'medium'
+    difficulty: 'medium',
+    aiConfig: {
+      provider: 'gemini',
+      apiKey: ''
+    }
   });
 
   const [guessModalOpen, setGuessModalOpen] = useState(false);
@@ -38,6 +47,14 @@ const App: React.FC = () => {
   const getColorName = (color: TileColor) => color === 'black' ? '黑色' : '白色';
 
   // --- Actions ---
+
+  const handleSetupComplete = (provider: AiProvider, apiKey: string) => {
+    setGameState(prev => ({
+      ...prev,
+      aiConfig: { provider, apiKey }
+    }));
+    setIsSetupComplete(true);
+  };
 
   const addLog = (player: PlayerType, message: string, type: GameLogEntry['type'] = 'info') => {
     setGameState(prev => ({
@@ -109,7 +126,7 @@ const App: React.FC = () => {
   // --- Turn Management ---
 
   useEffect(() => {
-    if (gameState.phase === 'setup' || gameState.winner) return;
+    if (!isSetupComplete || gameState.phase === 'setup' || gameState.winner) return;
 
     const checkWin = () => {
       const playerLost = gameState.playerHand.every(t => t.isRevealed);
@@ -140,7 +157,7 @@ const App: React.FC = () => {
         makeAiMove(true);
       }
     }
-  }, [gameState.phase, gameState.turn, gameState.winner, gameState.playerHand, gameState.aiHand]);
+  }, [gameState.phase, gameState.turn, gameState.winner, gameState.playerHand, gameState.aiHand, isSetupComplete]);
 
 
   const handleDrawPhase = () => {
@@ -335,6 +352,8 @@ const App: React.FC = () => {
     });
 
     const move = await getAiMove(
+      gameState.aiConfig.provider,
+      gameState.aiConfig.apiKey,
       gameState.aiHand,
       gameState.playerHand,
       gameState.deck.length,
@@ -400,13 +419,17 @@ const App: React.FC = () => {
 
   // --- Render ---
 
+  if (!isSetupComplete) {
+    return <SetupScreen onStart={handleSetupComplete} />;
+  }
+
   if (gameState.phase === 'setup') {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
-         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow">
+         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow animate-slideDown">
             达芬奇密码
          </h1>
-         <div className="max-w-md text-center text-slate-400 mb-8 space-y-4">
+         <div className="max-w-md text-center text-slate-400 mb-8 space-y-4 animate-fadeIn">
            <p>与机器进行一场智慧的较量。</p>
            <p>在对手破解你的密码之前，推断出他们手牌中的隐藏数字。</p>
            
@@ -440,7 +463,7 @@ const App: React.FC = () => {
 
          <button 
            onClick={startGame}
-           className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 px-12 rounded-full text-xl shadow-lg transition-all hover:scale-105 flex items-center gap-3 mt-4"
+           className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-4 px-12 rounded-full text-xl shadow-lg transition-all hover:scale-105 flex items-center gap-3 mt-4 animate-pulse"
          >
            <Play size={24} fill="currentColor" /> 进入圣殿
          </button>
