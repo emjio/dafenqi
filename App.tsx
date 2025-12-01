@@ -13,7 +13,7 @@ import { LogPanel } from './components/LogPanel';
 import { SetupScreen } from './components/SetupScreen';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UserSetupModal } from './components/UserSetupModal';
-import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield, Trophy, Lock, Timer, Home, Settings } from 'lucide-react';
+import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield, Trophy, Lock, Timer, Home, Settings, Clock } from 'lucide-react';
 
 const INITIAL_HAND_SIZE = 4;
 const TURN_DURATION = 30; // 30 seconds
@@ -76,7 +76,12 @@ const App: React.FC = () => {
   }, []);
 
   // --- Timer Logic ---
-  const isPlayerTurnActive = isSetupComplete && !gameState.winner && gameState.turn === 'player' && gameState.phase !== 'setup' && gameState.phase !== 'gameover';
+  // Timer should only run during active player action phases
+  const shouldTimerRun = 
+    isSetupComplete && 
+    !gameState.winner && 
+    gameState.turn === 'player' && 
+    (gameState.phase === 'guess' || gameState.phase === 'placement');
 
   useEffect(() => {
     // Clear existing timer if any
@@ -85,20 +90,14 @@ const App: React.FC = () => {
       timerRef.current = null;
     }
 
-    if (isPlayerTurnActive) {
-      // Reset timer visual only if we are starting a fresh turn?
-      // Not necessarily, timeLeft should be managed by the logic that switches turns.
-      // But to ensure safety, we rely on the setTimeLeft(TURN_DURATION) called in startGame/endTurn.
-      
+    if (shouldTimerRun) {
       timerRef.current = window.setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 0) return 0;
           return prev - 1;
         });
       }, 1000);
-    } else {
-      setTimeLeft(TURN_DURATION); // Reset when not player turn
-    }
+    } 
 
     return () => {
       if (timerRef.current) {
@@ -106,14 +105,22 @@ const App: React.FC = () => {
         timerRef.current = null;
       }
     };
-  }, [isPlayerTurnActive]);
+  }, [shouldTimerRun]);
+
+  // Reset Timer Logic: Reset whenever entering 'guess' or 'placement' phase for player
+  useEffect(() => {
+    if (gameState.turn === 'player' && (gameState.phase === 'guess' || gameState.phase === 'placement')) {
+      setTimeLeft(TURN_DURATION);
+    }
+  }, [gameState.phase, gameState.turn]);
+
 
   // Handle Timeout Effect
   useEffect(() => {
-    if (isPlayerTurnActive && timeLeft === 0) {
+    if (shouldTimerRun && timeLeft === 0) {
       handleTurnTimeout();
     }
-  }, [timeLeft, isPlayerTurnActive]);
+  }, [timeLeft, shouldTimerRun]);
 
   const handleTurnTimeout = () => {
     if (gameState.phase === 'placement') {
@@ -123,6 +130,7 @@ const App: React.FC = () => {
       return;
     }
 
+    setGuessModalOpen(false);
     addLog('player', '思考时间耗尽！强制结束回合并暴露手牌。', 'failure');
     handleIncorrectGuess('player'); // Treat as wrong guess to trigger reveal and turn switch
   };
@@ -754,13 +762,16 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4 pointer-events-auto">
              
              {/* Timer Display */}
-             {!gameState.winner && gameState.turn === 'player' && (
+             {!gameState.winner && gameState.turn === 'player' && (gameState.phase === 'guess' || gameState.phase === 'placement') && (
                <div className={`
-                 flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-sm transition-all animate-fadeIn
-                 ${timeLeft <= 10 ? 'bg-red-900/40 border-red-500 text-red-100 animate-pulse' : 'bg-slate-900/40 border-slate-600 text-slate-300'}
+                 flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-sm transition-all animate-fadeIn shadow-lg
+                 ${timeLeft <= 10 
+                    ? 'bg-red-600/90 border-red-400 text-white animate-pulse scale-110' 
+                    : 'bg-slate-900/60 border-slate-600 text-slate-300'}
                `}>
-                 <Timer size={16} className={timeLeft <= 5 ? 'animate-spin' : ''} />
-                 <span className="font-mono font-bold w-6 text-center">{timeLeft}s</span>
+                 <Clock size={18} className={timeLeft <= 10 ? 'animate-spin' : ''} />
+                 <span className="font-mono font-bold w-12 text-center text-lg">{timeLeft}s</span>
+                 {timeLeft <= 10 && <span className="text-xs font-bold uppercase animate-ping">!</span>}
                </div>
              )}
 

@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from 'react';
 import { GameLogEntry } from '../types';
 import { MessageSquare, Terminal } from 'lucide-react';

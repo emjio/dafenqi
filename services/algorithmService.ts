@@ -1,50 +1,80 @@
 
-import { Tile, AiGuessResult, Difficulty } from "../types";
+import { Tile, AiGuessResult, Difficulty, TileColor } from "../types";
 import { TOTAL_NUMBERS } from "../utils/gameLogic";
 
-// Helper: Extract previous wrong guesses from logs
+// --- Types ---
+type CandidateSet = Set<number>; // -1 for Joker, 0-11 for numbers
+
+interface SlotConstraint {
+  index: number;
+  color: TileColor;
+  isRevealed: boolean;
+  value: number; // -1 if hidden (or if it is a revealed joker, value is -1)
+  candidates: CandidateSet;
+}
+
+// --- Helpers ---
+
+// Extract previous wrong guesses from logs specific to this game state
+// Note: This is a simplified memory. Ideally, the AI should track this internally in state, 
+// but parsing logs works for this stateless service function.
 const getInvalidGuessesForSlots = (logs: string[], playerHandSize: number): Set<string> => {
   const invalidSet = new Set<string>();
-  // Matches: "猜测你位置 X 的牌是 Y" (Log format from App.tsx)
-  // We need to parse the Chinese log format strictly
   const regex = /猜测你位置 (\d+) 的牌是 (-?\d+|"-")/;
 
+  // We iterate backwards to find the last "Draw" or "Turn Start" to ensure we don't count guesses from previous games?
+  // Actually, for the current match, history is valid.
+  // But if the player hand changed size (someone won/lost?), indices might shift?
+  // In Coda/Davinci, hand size grows. Indices are stable for existing cards.
+  // New cards are added. 
+  // However, simple parsing is usually enough for the current "Stateless AI" context.
+  
   logs.forEach(log => {
-    // Only care about AI's failed guesses or player's failed guesses? 
-    // Actually, we only care about what *this* AI has already tried on the current configuration.
-    // However, since logs are mixed, we look for lines where AI acted.
-    // In App.tsx, the log is: addLog('ai', `猜测你位置 ${move.targetIndex + 1} 的牌是 ${guessDisplay}。`, 'info');
-    // followed by '猜错了！' if it failed.
-    // Simplifying: If the AI made a guess and it's NOT revealed in the current hand, it was wrong.
-    
     const match = log.match(regex);
     if (match) {
-      const pos = parseInt(match[1]) - 1; // 1-based in log to 0-based
+      // Check if this guess resulted in a failure.
+      // The log lines are sequential. 
+      // If we see "猜测... X" then later "猜对了", that guess was valid (but now revealed).
+      // If "猜错了", it was invalid.
+      // Since we filter out revealed cards later, we mainly care about WRONG guesses on HIDDEN cards.
+      // We assume the service provides logs.
+      // For simplicity here: If it's in the log as a guess, and the card is STILL hidden, 
+      // it implies it was either wrong OR it was right but we are in the "continue" phase (unlikely to guess same index).
+      // Actually, standardizing: Treat any guess on a currently hidden card found in logs as "Tried and Failed" (or "Already Known").
+      // Since we don't want to guess it again regardless.
+      
+      const pos = parseInt(match[1]) - 1;
       let valStr = match[2];
       const val = valStr === '"-"' || valStr === '-' ? -1 : parseInt(valStr);
-      
-      // key: "pos-val"
       invalidSet.add(`${pos}-${val}`);
     }
   });
   return invalidSet;
 };
 
-// Helper: Get numbers that are definitely NOT available (in AI hand or revealed in Player hand)
 const getGlobalImpossibleNumbers = (aiHand: Tile[], playerHand: Tile[]): Set<number> => {
   const impossible = new Set<number>();
-  
-  // AI knows its own cards
-  aiHand.forEach(t => {
-    if (t.value !== -1) impossible.add(t.value);
-  });
-
-  // AI knows revealed player cards
-  playerHand.forEach(t => {
-    if (t.isRevealed && t.value !== -1) impossible.add(t.value);
-  });
-
+  aiHand.forEach(t => { if (t.value !== -1) impossible.add(t.value); });
+  playerHand.forEach(t => { if (t.isRevealed && t.value !== -1) impossible.add(t.value); });
   return impossible;
+};
+
+// Check if `next` can come after `prev` given their colors
+const isValidSequence = (prevVal: number, prevColor: TileColor, nextVal: number, nextColor: TileColor): boolean => {
+  // Joker checks
+  if (prevVal === -1 || nextVal === -1) return true;
+
+  // Sorting Rule: Small -> Large
+  if (nextVal < prevVal) return false;
+
+  // Tie-breaker: If values equal, Black must be Left
+  if (prevVal === nextVal) {
+    // Valid: Black -> White
+    // Invalid: White -> Black
+    if (prevColor === 'white' && nextColor === 'black') return false;
+  }
+
+  return true;
 };
 
 export const getAlgorithmMove = async (
@@ -57,161 +87,178 @@ export const getAlgorithmMove = async (
   difficulty: Difficulty
 ): Promise<AiGuessResult> => {
   
-  // Simulate thinking
-  const thinkTime = difficulty === 'hard' ? 2000 : 1000;
+  // Simulate thinking delay
+  const thinkTime = difficulty === 'hard' ? 1500 : 1000;
   await new Promise(resolve => setTimeout(resolve, thinkTime));
 
-  // --- Decision: Continue or Stop? ---
+  // --- 1. Decision to Pass ---
   if (canPass) {
-    // Logic: If I have a "Sure Fire" guess available, continue. Otherwise stop.
-    // For algorithm simplicity:
-    let threshold = 0.5;
-    if (difficulty === 'easy') threshold = 0.9; // Stop almost always
-    if (difficulty === 'hard') threshold = 0.3; // Continue unless very risky
-
-    if (Math.random() < threshold) {
+    // If aggressive (Hard), rarely pass. If Easy, pass often.
+    const passChance = difficulty === 'easy' ? 0.8 : (difficulty === 'medium' ? 0.5 : 0.2);
+    if (Math.random() < passChance) {
       return {
         targetIndex: -1,
         guessValue: 0,
-        reasoning: "保持优势，结束回合。",
-        chatMessage: "不贪心，这局稳了。"
+        reasoning: "见好就收，保持优势。",
+        chatMessage: "这次先放过你。"
       };
     }
   }
 
-  // --- Deduction Engine ---
-
-  const hiddenIndices = playerHand.map((t, i) => t.isRevealed ? -1 : i).filter(i => i !== -1);
-  if (hiddenIndices.length === 0) {
-    return { targetIndex: -1, guessValue: 0, reasoning: "", chatMessage: "" };
-  }
-
+  // --- 2. Initialize Slots & Candidates ---
   const impossibleNumbers = getGlobalImpossibleNumbers(aiHand, playerHand);
   const invalidHistory = getInvalidGuessesForSlots(fullLogHistory, playerHand.length);
   
-  // We will score each hidden slot based on how "narrow" the possibility range is.
-  // Lower score = Better target (fewer possibilities).
-  let bestTargetIndex = -1;
-  let bestGuessValue = -1;
-  let minPossibilities = 999;
-  let bestReasoning = "";
-
-  for (const targetIdx of hiddenIndices) {
-    // 1. Find Left constraint
-    let leftVal = -1;
-    let leftDist = 0;
-    for (let i = targetIdx - 1; i >= 0; i--) {
-      leftDist++;
-      if (playerHand[i].isRevealed && playerHand[i].value !== -1) {
-        leftVal = playerHand[i].value;
-        break;
+  const slots: SlotConstraint[] = playerHand.map((t, i) => {
+    const candidates = new Set<number>();
+    
+    if (t.isRevealed) {
+      // If revealed, it only has one value.
+      candidates.add(t.value);
+    } else {
+      // If hidden, init with all valid numbers + Joker
+      for (let v = 0; v < TOTAL_NUMBERS; v++) {
+        if (!impossibleNumbers.has(v) && !invalidHistory.has(`${i}-${v}`)) {
+          candidates.add(v);
+        }
+      }
+      // Check Joker validity
+      if (!invalidHistory.has(`${i}--1`)) {
+        // Can we rule out Joker based on global count?
+        let visibleJokers = 0;
+        aiHand.forEach(card => card.value === -1 && visibleJokers++);
+        playerHand.forEach(card => card.isRevealed && card.value === -1 && visibleJokers++);
+        if (visibleJokers < 2) {
+          candidates.add(-1);
+        }
       }
     }
 
-    // 2. Find Right constraint
-    let rightVal = TOTAL_NUMBERS; // 12
-    let rightDist = 0;
-    for (let i = targetIdx + 1; i < playerHand.length; i++) {
-      rightDist++;
-      if (playerHand[i].isRevealed && playerHand[i].value !== -1) {
-        rightVal = playerHand[i].value;
-        break;
+    return {
+      index: i,
+      color: t.color,
+      isRevealed: t.isRevealed,
+      value: t.isRevealed ? t.value : -1, // -1 placeholder for hidden
+      candidates
+    };
+  });
+
+  // --- 3. Constraint Propagation Loop ---
+  // We keep filtering candidates until no changes occur
+  let changed = true;
+  let loops = 0;
+  
+  while (changed && loops < 10) {
+    changed = false;
+    loops++;
+
+    for (let i = 0; i < slots.length; i++) {
+      const current = slots[i];
+      if (current.candidates.size === 0) continue; // Should not happen ideally
+
+      const originalSize = current.candidates.size;
+      const newCandidates = new Set<number>();
+
+      // Filter based on Left Neighbor
+      const left = i > 0 ? slots[i - 1] : null;
+      // Filter based on Right Neighbor
+      const right = i < slots.length - 1 ? slots[i + 1] : null;
+
+      for (const val of current.candidates) {
+        let validLeft = true;
+        let validRight = true;
+
+        // Check if there is AT LEAST ONE valid value in the left neighbor
+        if (left) {
+          let hasCompatibleLeft = false;
+          for (const lVal of left.candidates) {
+            if (isValidSequence(lVal, left.color, val, current.color)) {
+              hasCompatibleLeft = true;
+              break;
+            }
+          }
+          if (!hasCompatibleLeft) validLeft = false;
+        }
+
+        // Check if there is AT LEAST ONE valid value in the right neighbor
+        if (right) {
+          let hasCompatibleRight = false;
+          for (const rVal of right.candidates) {
+            if (isValidSequence(val, current.color, rVal, right.color)) {
+              hasCompatibleRight = true;
+              break;
+            }
+          }
+          if (!hasCompatibleRight) validRight = false;
+        }
+
+        if (validLeft && validRight) {
+          newCandidates.add(val);
+        }
       }
-    }
 
-    // 3. Generate Candidates based on "Distance Logic"
-    // The card at targetIdx must be > leftVal (approx) and < rightVal (approx)
-    // Strictly: (leftVal + leftDist) <= candidate <= (rightVal - rightDist)
-    // BUT this assumes no Jokers in between.
-    // Since Jokers exist, we relax the strict distance check but keep the bound check.
-    
-    const possibleValues: number[] = [];
-    
-    // Check standard numbers
-    for (let v = 0; v < TOTAL_NUMBERS; v++) {
-      if (impossibleNumbers.has(v)) continue; // Already seen
-      if (invalidHistory.has(`${targetIdx}-${v}`)) continue; // Already guessed wrong
-      
-      // Basic Sort Rule: Must be larger than left neighbor, smaller than right neighbor
-      if (v <= leftVal) continue;
-      if (v >= rightVal) continue;
-
-      // Advanced Distance Heuristic (Hard Mode Only)
-      // If we assume NO jokers in the gap, then the value must scale with distance.
-      // E.g. [2, ?, ?, 5]. The first ? cannot be 5. It must be at least 3. 
-      // The second ? must be at least 4.
-      // This is risky if there's a Joker, but statistically strong.
-      if (difficulty === 'hard') {
-         // Relaxed distance: Assume at least 1 step per slot?
-         // Actually, let's just use the strict bound logic but fallback if empty.
-         if (v < leftVal + leftDist) continue; 
-         if (v > rightVal - rightDist) continue;
-      }
-
-      possibleValues.push(v);
-    }
-
-    // Always consider Joker (-1) unless we know all jokers
-    // Check how many jokers are visible
-    let visibleJokers = 0;
-    aiHand.forEach(t => t.value === -1 && visibleJokers++);
-    playerHand.forEach(t => t.isRevealed && t.value === -1 && visibleJokers++);
-    
-    if (visibleJokers < 2 && !invalidHistory.has(`${targetIdx}--1`)) {
-       // Joker is a possibility
-       // In logic, joker has low probability compared to a calculated number fit
-       // We add it, but maybe treat it separately or add to list
-       if (difficulty !== 'easy') {
-          // In hard mode, only guess Joker if numbers are tight or empty
-          if (possibleValues.length === 0) possibleValues.push(-1);
-          else if (Math.random() > 0.8) possibleValues.push(-1); // Small chance to suspect Joker
-       } else {
-          possibleValues.push(-1);
-       }
-    }
-
-    // 4. Evaluate this slot
-    if (possibleValues.length > 0 && possibleValues.length < minPossibilities) {
-      minPossibilities = possibleValues.length;
-      bestTargetIndex = targetIdx;
-      // Pick the median value for "safest" bet in a range, or random
-      const mid = Math.floor(possibleValues.length / 2);
-      bestGuessValue = possibleValues[mid];
-      
-      if (bestGuessValue === -1) {
-        bestReasoning = "排除所有数字可能，这里一定是特殊牌。";
-      } else {
-         bestReasoning = `根据左右邻居（${leftVal === -1 ? '开头' : leftVal} 和 ${rightVal === 12 ? '结尾' : rightVal}），数字被锁定在极小范围。`;
+      // Update candidates
+      if (newCandidates.size < originalSize) {
+        current.candidates = newCandidates;
+        changed = true;
       }
     }
   }
 
-  // --- Fallback if no logical deduction found ---
-  if (bestTargetIndex === -1) {
-    // Pick random hidden slot
-    bestTargetIndex = hiddenIndices[Math.floor(Math.random() * hiddenIndices.length)];
-    // Pick random valid number
-    let randomVal = Math.floor(Math.random() * TOTAL_NUMBERS);
-    while (impossibleNumbers.has(randomVal) || invalidHistory.has(`${bestTargetIndex}-${randomVal}`)) {
-       randomVal = (randomVal + 1) % TOTAL_NUMBERS;
-       // Safety break?
-       if (Math.random() < 0.05) break; 
+  // --- 4. Select Best Move ---
+  let bestTarget = -1;
+  let bestGuess = -1;
+  let minCandidates = 999;
+  let bestReasoning = "";
+
+  const hiddenSlots = slots.filter(s => !s.isRevealed);
+  
+  if (hiddenSlots.length === 0) {
+     return { targetIndex: -1, guessValue: 0, reasoning: "Error", chatMessage: "Err" };
+  }
+
+  // Find the slot with the fewest possibilities
+  for (const slot of hiddenSlots) {
+    if (slot.candidates.size > 0 && slot.candidates.size < minCandidates) {
+      minCandidates = slot.candidates.size;
+      bestTarget = slot.index;
+      
+      // Heuristic: Pick the value closest to the median of candidates
+      const sorted = Array.from(slot.candidates).sort((a,b) => a - b);
+      bestGuess = sorted[Math.floor(sorted.length / 2)];
+      
+      const prob = Math.round((1 / slot.candidates.size) * 100);
+      bestReasoning = `经过多重逻辑排除，该位置只有 ${slot.candidates.size} 种可能性（${Array.from(slot.candidates).map(v=>v===-1?'-':v).join(',')}），命中率约 ${prob}%。`;
     }
-    bestGuessValue = randomVal;
-    bestReasoning = "现有线索不足，进行概率试探。";
+  }
+
+  // If constraint solver failed (contradiction or logic bug), fallback to random
+  if (bestTarget === -1) {
+    const randomSlot = hiddenSlots[Math.floor(Math.random() * hiddenSlots.length)];
+    bestTarget = randomSlot.index;
+    
+    // Pick a safe random number not in impossible list
+    let attempts = 0;
+    do {
+      bestGuess = Math.floor(Math.random() * TOTAL_NUMBERS);
+      if (Math.random() > 0.8) bestGuess = -1;
+      attempts++;
+    } while ((impossibleNumbers.has(bestGuess) || invalidHistory.has(`${bestTarget}-${bestGuess}`)) && attempts < 20);
+    
+    bestReasoning = "逻辑链断裂，只能依直觉行事。";
   }
 
   const chats = [
-    "这一步完全在计算之中。",
-    "你的排序习惯我已经掌握了。",
-    "排除法是不会骗人的。",
-    "别紧张，只是个数字游戏。",
-    "我看透了你的布局。"
+    "如果你以为能骗过我的算法...",
+    "数据是不会撒谎的。",
+    "你的手牌已经暴露了。",
+    "正在计算最优解...完成。",
+    "这步棋在预料之中。"
   ];
 
   return {
-    targetIndex: bestTargetIndex,
-    guessValue: bestGuessValue,
+    targetIndex: bestTarget,
+    guessValue: bestGuess,
     reasoning: bestReasoning,
     chatMessage: chats[Math.floor(Math.random() * chats.length)]
   };
