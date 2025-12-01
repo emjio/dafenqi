@@ -25,7 +25,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
 
             <section>
               <h3 className="text-xl text-white font-bold mb-2 flex items-center gap-2"><div className="w-2 h-2 bg-amber-500 rounded-full"/> 核心机制：排序</h3>
-              <p>所有手牌在摸到时，必须按照**从小到大（0 -> 11）**的顺序排列。</p>
+              <p>所有手牌在摸到时，必须按照**从小到大（0 -&gt; 11）**的顺序排列。</p>
               <ul className="list-disc pl-6 mt-2 space-y-1 text-slate-400">
                 <li>如果你有黑色的 3 和白色的 7，那么 3 必须在 7 的左边。</li>
                 <li>如果数字相同（例如黑 5 和白 5），**黑牌必须在左边**。</li>
