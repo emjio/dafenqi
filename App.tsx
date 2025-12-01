@@ -51,7 +51,7 @@ const App: React.FC = () => {
   
   // --- Timer State ---
   const [timeLeft, setTimeLeft] = useState(TURN_DURATION);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<number | null>(null);
 
   // --- Helper ---
   const getColorName = (color: TileColor) => color === 'black' ? '黑色' : '白色';
@@ -76,24 +76,23 @@ const App: React.FC = () => {
   }, []);
 
   // --- Timer Logic ---
+  const isPlayerTurnActive = isSetupComplete && !gameState.winner && gameState.turn === 'player' && gameState.phase !== 'setup' && gameState.phase !== 'gameover';
+
   useEffect(() => {
     // Clear existing timer if any
-    if (timerRef.current) clearInterval(timerRef.current);
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
 
-    // Only run timer if game is active, no winner, and it is a specific player's turn
-    // We run timer for Player. AI has its own internal delay logic (simulated thinking).
-    if (isSetupComplete && !gameState.winner && gameState.turn === 'player' && gameState.phase !== 'setup' && gameState.phase !== 'gameover') {
+    if (isPlayerTurnActive) {
+      // Reset timer visual only if we are starting a fresh turn?
+      // Not necessarily, timeLeft should be managed by the logic that switches turns.
+      // But to ensure safety, we rely on the setTimeLeft(TURN_DURATION) called in startGame/endTurn.
       
-      setTimeLeft(TURN_DURATION); // Reset on turn start logic handled by dependency change or manual reset
-      
-      timerRef.current = setInterval(() => {
+      timerRef.current = window.setInterval(() => {
         setTimeLeft((prev) => {
-          if (prev <= 1) {
-             // Timeout!
-             if (timerRef.current) clearInterval(timerRef.current);
-             handleTurnTimeout();
-             return 0;
-          }
+          if (prev <= 0) return 0;
           return prev - 1;
         });
       }, 1000);
@@ -102,9 +101,19 @@ const App: React.FC = () => {
     }
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [gameState.turn, gameState.phase, gameState.winner, isSetupComplete]);
+  }, [isPlayerTurnActive]);
+
+  // Handle Timeout Effect
+  useEffect(() => {
+    if (isPlayerTurnActive && timeLeft === 0) {
+      handleTurnTimeout();
+    }
+  }, [timeLeft, isPlayerTurnActive]);
 
   const handleTurnTimeout = () => {
     if (gameState.phase === 'placement') {
