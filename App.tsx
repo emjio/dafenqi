@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  GameState, Tile, PlayerType, GameLogEntry, TileColor, Difficulty, AiProvider 
+  GameState, Tile, PlayerType, GameLogEntry, TileColor, Difficulty, AiProvider, UserProfile 
 } from './types';
 import { 
   createDeck, drawTile, sortHand, TOTAL_NUMBERS 
@@ -11,15 +11,21 @@ import { TileComponent } from './components/TileComponent';
 import { GuessModal } from './components/GuessModal';
 import { LogPanel } from './components/LogPanel';
 import { SetupScreen } from './components/SetupScreen';
-import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield } from 'lucide-react';
+import { OnboardingModal } from './components/OnboardingModal';
+import { UserSetupModal } from './components/UserSetupModal';
+import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield, Trophy, Lock, Timer, Home, Settings } from 'lucide-react';
 
 const INITIAL_HAND_SIZE = 4;
+const TURN_DURATION = 30; // 30 seconds
 
 const App: React.FC = () => {
-  // --- State ---
-  // Initial phase is now 'setup' before we even show the main menu
+  // --- Flow State ---
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showUserSetup, setShowUserSetup] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
-  
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  // --- Game State ---
   const [gameState, setGameState] = useState<GameState>({
     playerHand: [],
     aiHand: [],
@@ -30,7 +36,7 @@ const App: React.FC = () => {
     logs: [],
     lastGuessedTileId: null,
     pendingTile: null,
-    difficulty: 'medium',
+    difficulty: 'easy', // Default start at easy unless veteran
     aiConfig: {
       provider: 'gemini',
       apiKey: ''
@@ -42,11 +48,103 @@ const App: React.FC = () => {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showTurnNotification, setShowTurnNotification] = useState<{player: PlayerType, show: boolean}>({ player: 'player', show: false });
+  
+  // --- Timer State ---
+  const [timeLeft, setTimeLeft] = useState(TURN_DURATION);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- Helper ---
   const getColorName = (color: TileColor) => color === 'black' ? '黑色' : '白色';
 
-  // --- Actions ---
+  // --- Initialization & LocalStorage ---
+  useEffect(() => {
+    // Check LocalStorage for User Profile
+    const storedProfile = localStorage.getItem('dv_user_profile');
+    
+    if (storedProfile) {
+      const parsedProfile = JSON.parse(storedProfile);
+      setUserProfile(parsedProfile);
+      setGameState(prev => ({
+        ...prev,
+        difficulty: parsedProfile.unlockedDifficulty === 'hard' ? 'medium' : parsedProfile.unlockedDifficulty 
+      }));
+      setShowOnboarding(false);
+      setShowUserSetup(false);
+    } else {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  // --- Timer Logic ---
+  useEffect(() => {
+    // Clear existing timer if any
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    // Only run timer if game is active, no winner, and it is a specific player's turn
+    // We run timer for Player. AI has its own internal delay logic (simulated thinking).
+    if (isSetupComplete && !gameState.winner && gameState.turn === 'player' && gameState.phase !== 'setup' && gameState.phase !== 'gameover') {
+      
+      setTimeLeft(TURN_DURATION); // Reset on turn start logic handled by dependency change or manual reset
+      
+      timerRef.current = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+             // Timeout!
+             if (timerRef.current) clearInterval(timerRef.current);
+             handleTurnTimeout();
+             return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      setTimeLeft(TURN_DURATION); // Reset when not player turn
+    }
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [gameState.turn, gameState.phase, gameState.winner, isSetupComplete]);
+
+  const handleTurnTimeout = () => {
+    if (gameState.phase === 'placement') {
+      // Auto place at end
+      handlePlacement(gameState.playerHand.length);
+      addLog('player', '操作超时！自动放置手牌。', 'failure');
+      return;
+    }
+
+    addLog('player', '思考时间耗尽！强制结束回合并暴露手牌。', 'failure');
+    handleIncorrectGuess('player'); // Treat as wrong guess to trigger reveal and turn switch
+  };
+
+  // --- Flow Handlers ---
+
+  const handleOnboardingComplete = (skip: boolean, isVeteran: boolean) => {
+    setShowOnboarding(false);
+    
+    let difficulty: Difficulty = 'easy';
+    if (isVeteran) difficulty = 'medium';
+
+    setGameState(prev => ({ ...prev, difficulty }));
+    setShowUserSetup(true);
+  };
+
+  const handleUserSetupComplete = (username: string) => {
+    const isVeteran = gameState.difficulty === 'medium';
+    
+    const newProfile: UserProfile = {
+      username,
+      matchesPlayed: 0,
+      wins: 0,
+      losses: 0,
+      unlockedDifficulty: isVeteran ? 'medium' : 'easy'
+    };
+
+    localStorage.setItem('dv_user_profile', JSON.stringify(newProfile));
+    setUserProfile(newProfile);
+    setShowUserSetup(false);
+  };
 
   const handleSetupComplete = (provider: AiProvider, apiKey: string) => {
     setGameState(prev => ({
@@ -56,20 +154,61 @@ const App: React.FC = () => {
     setIsSetupComplete(true);
   };
 
-  const addLog = (player: PlayerType, message: string, type: GameLogEntry['type'] = 'info') => {
+  // --- Game Logic Updates for Profile ---
+
+  const updateStats = (isWin: boolean) => {
+    if (!userProfile) return;
+
+    let newUnlocked = userProfile.unlockedDifficulty;
+    
+    // Unlock Logic
+    if (isWin) {
+      if (gameState.difficulty === 'easy' && userProfile.unlockedDifficulty === 'easy') {
+        newUnlocked = 'medium';
+        addLog('info', '恭喜！解锁中级难度！', 'success');
+      } else if (gameState.difficulty === 'medium' && userProfile.unlockedDifficulty !== 'hard') {
+        newUnlocked = 'hard';
+        addLog('info', '恭喜！解锁高级难度！', 'success');
+      }
+    }
+
+    const updatedProfile: UserProfile = {
+      ...userProfile,
+      matchesPlayed: userProfile.matchesPlayed + 1,
+      wins: userProfile.wins + (isWin ? 1 : 0),
+      losses: userProfile.losses + (isWin ? 0 : 1),
+      unlockedDifficulty: newUnlocked
+    };
+
+    setUserProfile(updatedProfile);
+    localStorage.setItem('dv_user_profile', JSON.stringify(updatedProfile));
+  };
+
+  // --- Actions ---
+
+  const addLog = (player: PlayerType | 'info', message: string, type: GameLogEntry['type'] = 'info') => {
     setGameState(prev => ({
       ...prev,
       logs: [...prev.logs, {
         id: Math.random().toString(36).substr(2, 9),
-        player,
+        player: player === 'info' ? 'player' : player, // Hack for type safety
         message,
         timestamp: Date.now(),
-        type
+        type: player === 'info' ? 'info' : type
       }]
     }));
   };
 
   const setDifficulty = (diff: Difficulty) => {
+    if (!userProfile) return;
+    
+    // Check lock
+    const levels = ['easy', 'medium', 'hard'];
+    const currentLevelIdx = levels.indexOf(diff);
+    const unlockedLevelIdx = levels.indexOf(userProfile.unlockedDifficulty);
+
+    if (currentLevelIdx > unlockedLevelIdx) return;
+
     setGameState(prev => ({ ...prev, difficulty: diff }));
   };
 
@@ -112,12 +251,25 @@ const App: React.FC = () => {
       pendingTile: null
     }));
     
-    addLog('player', `游戏开始。难度: ${gameState.difficulty === 'easy' ? '初级' : gameState.difficulty === 'medium' ? '中级' : '高级'}`, 'info');
+    addLog('info', `游戏开始。难度: ${gameState.difficulty === 'easy' ? '初级' : gameState.difficulty === 'medium' ? '中级' : '高级'}`, 'info');
     triggerTurnNotification('player');
+    setTimeLeft(TURN_DURATION);
+  };
+
+  const resetToMainMenu = () => {
+    setIsSetupComplete(false);
+    setGameState(prev => ({ ...prev, phase: 'setup', winner: null, logs: [] }));
+  };
+
+  const resetToDifficulty = () => {
+    setGameState(prev => ({ ...prev, phase: 'setup', winner: null, logs: [] }));
   };
 
   const triggerTurnNotification = (player: PlayerType) => {
     setShowTurnNotification({ player, show: true });
+    // Reset timer explicitly if it's player turn, handled in useEffect but good to be explicit for UI sync
+    if (player === 'player') setTimeLeft(TURN_DURATION);
+    
     setTimeout(() => {
       setShowTurnNotification(prev => ({ ...prev, show: false }));
     }, 2000);
@@ -135,9 +287,11 @@ const App: React.FC = () => {
       if (playerLost) {
         setGameState(prev => ({ ...prev, winner: 'ai', phase: 'gameover' }));
         addLog('ai', '你的秘密已全部暴露。我赢了。', 'failure');
+        updateStats(false);
       } else if (aiLost) {
         setGameState(prev => ({ ...prev, winner: 'player', phase: 'gameover' }));
         addLog('player', '你破解了所有谜题。你赢了！', 'success');
+        updateStats(true);
       }
     };
 
@@ -150,10 +304,8 @@ const App: React.FC = () => {
     // AI Logic Trigger
     if (gameState.turn === 'ai' && !isAiThinking && !gameState.winner) {
       if (gameState.phase === 'guess') {
-        // Initial mandatory guess
         makeAiMove(false);
       } else if (gameState.phase === 'decision') {
-        // Optional follow-up guess
         makeAiMove(true);
       }
     }
@@ -162,10 +314,17 @@ const App: React.FC = () => {
 
   const handleDrawPhase = () => {
     if (gameState.deck.length === 0) {
-      addLog(gameState.turn, '牌堆已空。直接进入猜测阶段。', 'info');
+      // Avoid log spam if multiple renders
+      if (gameState.logs.length > 0 && gameState.logs[gameState.logs.length - 1].message !== '牌堆已空。直接进入猜测阶段。') {
+          addLog(gameState.turn, '牌堆已空。直接进入猜测阶段。', 'info');
+      }
       setGameState(prev => ({ ...prev, phase: 'guess' }));
       return;
     }
+
+    // Check if we already have a new tile (react double render protection)
+    if (gameState.turn === 'player' && gameState.playerHand.some(t => t.isNew)) return;
+    if (gameState.turn === 'ai' && gameState.aiHand.some(t => t.isNew)) return;
 
     const { tile, newDeck } = drawTile(gameState.deck);
     if (!tile) return;
@@ -174,7 +333,6 @@ const App: React.FC = () => {
 
     if (gameState.turn === 'player') {
       if (tile.value === -1) {
-        // Prompt is handled by the UI overlay in render
         setGameState(prev => ({
           ...prev,
           deck: newDeck,
@@ -194,7 +352,6 @@ const App: React.FC = () => {
         });
       }
     } else {
-      // AI Turn
       if (tile.value === -1) {
         tile.sortValue = Math.random() * 12; 
       }
@@ -244,8 +401,6 @@ const App: React.FC = () => {
     addLog('player', '放置了特殊牌。', 'info');
   };
 
-  // --- Player Interactions ---
-
   const handleAiTileClick = (index: number) => {
     if (gameState.turn !== 'player' || gameState.phase !== 'guess' || gameState.winner) return;
     
@@ -265,7 +420,7 @@ const App: React.FC = () => {
     
     const guessDisplay = value === -1 ? '"-"' : value;
 
-    addLog('player', `猜测位置 ${targetTileIndex + 1} 是 ${guessDisplay}...`, 'info');
+    addLog('player', `猜测位置 ${targetTileIndex + 1} 的牌是 ${guessDisplay}...`, 'info');
 
     if (isCorrect) {
       handleCorrectGuess('player', targetTileIndex);
@@ -283,8 +438,6 @@ const App: React.FC = () => {
       newOpponentHand[targetIndex] = { ...newOpponentHand[targetIndex], isRevealed: true };
 
       const myHandKey = guesser === 'player' ? 'playerHand' : 'aiHand';
-      // When correct, the 'new' tile is no longer vulnerable if we choose to stop, 
-      // but in 'decision' phase we might keep guessing. The 'isNew' status persists until endTurn.
       const myHand = prev[myHandKey]; 
 
       return {
@@ -310,11 +463,12 @@ const App: React.FC = () => {
         const val = newHand[newTileIndex].value;
         const valDisplay = val === -1 ? '"-"' : val;
         addLog(guesser, `惩罚：公开了我的 ${getColorName(newHand[newTileIndex].color)} 牌 ${valDisplay}。`, 'failure');
+      } else {
+         // No new card to reveal (deck empty phase), just pass turn
       }
 
       const nextTurn = guesser === 'player' ? 'ai' : 'player';
       
-      // Trigger notification for next turn
       setTimeout(() => triggerTurnNotification(nextTurn), 500);
 
       return {
@@ -338,14 +492,12 @@ const App: React.FC = () => {
     triggerTurnNotification(gameState.turn === 'player' ? 'ai' : 'player');
   };
 
-  // --- AI Logic ---
-
   const makeAiMove = async (canPass: boolean) => {
     setIsAiThinking(true);
-    // Delay for realism
-    await new Promise(resolve => setTimeout(resolve, canPass ? 2000 : 2500));
+    // Delay slightly less for algorithm to keep it snappy but realistic
+    const delay = gameState.aiConfig.provider === 'algorithm' ? 500 : (canPass ? 2000 : 2500);
+    await new Promise(resolve => setTimeout(resolve, delay));
 
-    // Snapshot logs for context
     const fullLogHistory = gameState.logs.map(l => {
       const prefix = l.player === 'ai' ? '[我/AI]' : '[对手/玩家]';
       return `${prefix}: ${l.message}`;
@@ -368,7 +520,6 @@ const App: React.FC = () => {
       addLog('ai', move.chatMessage, 'chat');
     }
 
-    // Check if AI decided to pass (stop guessing)
     if (canPass && move.targetIndex === -1) {
        addLog('ai', 'AI 决定结束回合。', 'info');
        setGameState(prev => ({
@@ -381,18 +532,18 @@ const App: React.FC = () => {
        return;
     }
 
-    // Validate Move
     if (move.targetIndex < 0 || move.targetIndex >= gameState.playerHand.length) {
-       // Should theoretically not happen if AI is working correctly
+       // Fallback for safety
        if (canPass) {
-          // Treat invalid move as pass in decision phase
           addLog('ai', 'AI 决定结束回合。', 'info');
           setGameState(prev => ({ ...prev, turn: 'player', phase: 'draw' }));
           triggerTurnNotification('player');
           return;
        }
-       addLog('ai', '困惑中失误了（无效位置）。回合结束。', 'failure');
-       handleIncorrectGuess('ai');
+       // If forced to guess but AI failed to give valid index, random fallback handled in service usually, but check here
+       addLog('ai', '跳过回合。', 'info');
+       setGameState(prev => ({ ...prev, turn: 'player', phase: 'draw' }));
+       triggerTurnNotification('player');
        return;
     }
 
@@ -400,27 +551,65 @@ const App: React.FC = () => {
     addLog('ai', `猜测你位置 ${move.targetIndex + 1} 的牌是 ${guessDisplay}。`, 'info');
 
     const targetTile = gameState.playerHand[move.targetIndex];
+    
+    // Safety check if AI guesses already revealed card (Service should prevent, but double check)
     if (targetTile.isRevealed) {
-       addLog('ai', '愚蠢地猜了一张已经揭示的牌。', 'failure');
+       // Just treat as wrong for simplicity
        handleIncorrectGuess('ai');
        return;
     }
 
     if (targetTile.value === move.guessValue) {
-      // AI Guessed Correctly
-      // handleCorrectGuess sets phase to 'decision' and turn to 'ai'
-      // This will trigger the useEffect again, calling makeAiMove(true)
       handleCorrectGuess('ai', move.targetIndex);
     } else {
       handleIncorrectGuess('ai');
     }
   };
 
+  // --- Avatar Generator ---
+  const generateAvatarStyle = (name: string) => {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash % 360);
+    return {
+      background: `linear-gradient(135deg, hsl(${hue}, 70%, 60%), hsl(${hue + 40}, 80%, 40%))`,
+    };
+  };
+
 
   // --- Render ---
 
+  if (showOnboarding) {
+    return <OnboardingModal onComplete={handleOnboardingComplete} />;
+  }
+
+  if (showUserSetup) {
+    return <UserSetupModal onComplete={handleUserSetupComplete} />;
+  }
+
   if (!isSetupComplete) {
-    return <SetupScreen onStart={handleSetupComplete} />;
+    return (
+      <>
+       {/* Small Welcome Header for Setup */}
+       {userProfile && (
+         <div className="absolute top-4 right-4 z-50 flex items-center gap-2 animate-slideLeft">
+            <span className="text-slate-400 text-sm">欢迎回来,</span>
+            <div className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
+              <div 
+                className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-inner"
+                style={generateAvatarStyle(userProfile.username)}
+              >
+                {userProfile.username.charAt(0).toUpperCase()}
+              </div>
+              <span className="text-white font-bold">{userProfile.username}</span>
+            </div>
+         </div>
+       )}
+       <SetupScreen onStart={handleSetupComplete} />
+      </>
+    );
   }
 
   if (gameState.phase === 'setup') {
@@ -429,31 +618,66 @@ const App: React.FC = () => {
          <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow animate-slideDown">
             达芬奇密码
          </h1>
+         
+         {/* User Welcome Block */}
+         {userProfile && (
+           <div className="mb-6 flex flex-col items-center animate-fadeIn">
+             <div 
+                className="w-20 h-20 rounded-full flex items-center justify-center text-4xl font-bold text-white shadow-2xl mb-2 ring-4 ring-slate-800"
+                style={generateAvatarStyle(userProfile.username)}
+             >
+                {userProfile.username.charAt(0).toUpperCase()}
+             </div>
+             <p className="text-xl text-slate-300">欢迎回来, <span className="text-white font-bold">{userProfile.username}</span></p>
+             <div className="flex gap-4 mt-2 text-xs text-slate-500">
+               <span className="flex items-center gap-1"><Trophy size={12} className="text-amber-500"/> {userProfile.wins} 胜</span>
+               <span>{userProfile.matchesPlayed} 场对决</span>
+             </div>
+           </div>
+         )}
+
          <div className="max-w-md text-center text-slate-400 mb-8 space-y-4 animate-fadeIn">
-           <p>与机器进行一场智慧的较量。</p>
-           <p>在对手破解你的密码之前，推断出他们手牌中的隐藏数字。</p>
            
            <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl mt-6">
               <h3 className="text-white font-bold mb-4 flex items-center justify-center gap-2">
                 <Shield size={18} className="text-indigo-400" /> 选择难度
               </h3>
               <div className="flex gap-3 justify-center">
-                 {(['easy', 'medium', 'hard'] as Difficulty[]).map((level) => (
-                   <button
-                     key={level}
-                     onClick={() => setDifficulty(level)}
-                     className={`
-                       px-4 py-2 rounded-lg font-bold capitalize transition-all border-2
-                       ${gameState.difficulty === level 
-                         ? 'bg-amber-500 text-black border-amber-500 scale-105 shadow-md' 
-                         : 'bg-slate-700 text-slate-400 border-slate-600 hover:border-slate-500'}
-                     `}
-                   >
-                     {{easy: '初级', medium: '中级', hard: '高级'}[level]}
-                   </button>
-                 ))}
+                 {(['easy', 'medium', 'hard'] as Difficulty[]).map((level) => {
+                   // Check lock status
+                   const isLocked = (() => {
+                      if (!userProfile) return false;
+                      const order = ['easy', 'medium', 'hard'];
+                      return order.indexOf(level) > order.indexOf(userProfile.unlockedDifficulty);
+                   })();
+
+                   return (
+                     <div key={level} className="relative group">
+                       <button
+                         onClick={() => setDifficulty(level)}
+                         disabled={isLocked}
+                         className={`
+                           px-4 py-2 rounded-lg font-bold capitalize transition-all border-2
+                           ${gameState.difficulty === level 
+                             ? 'bg-amber-500 text-black border-amber-500 scale-105 shadow-md' 
+                             : isLocked 
+                               ? 'bg-slate-800 text-slate-600 border-slate-700 cursor-not-allowed opacity-50'
+                               : 'bg-slate-700 text-slate-400 border-slate-600 hover:border-slate-500'}
+                         `}
+                       >
+                         {{easy: '初级', medium: '中级', hard: '高级'}[level]}
+                         {isLocked && <Lock size={12} className="absolute top-1 right-1" />}
+                       </button>
+                       {isLocked && (
+                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max px-2 py-1 bg-black text-xs text-white rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                           请先解锁前一难度
+                         </div>
+                       )}
+                     </div>
+                   );
+                 })}
               </div>
-              <p className="text-xs text-slate-500 mt-3">
+              <p className="text-xs text-slate-500 mt-3 h-4">
                 {gameState.difficulty === 'easy' && "AI 比较保守，容易犹豫。"}
                 {gameState.difficulty === 'medium' && "AI 逻辑严密，攻守平衡。"}
                 {gameState.difficulty === 'hard' && "AI 极具侵略性，利用高级排除法。"}
@@ -467,6 +691,15 @@ const App: React.FC = () => {
          >
            <Play size={24} fill="currentColor" /> 进入圣殿
          </button>
+         
+         <div className="mt-8">
+             <button 
+               onClick={resetToMainMenu}
+               className="text-slate-500 hover:text-white flex items-center gap-2 text-sm transition-colors"
+             >
+               <Settings size={14} /> 切换 AI 引擎
+             </button>
+         </div>
       </div>
     );
   }
@@ -502,10 +735,41 @@ const App: React.FC = () => {
         
         {/* Header */}
         <header className="absolute top-0 left-0 w-full p-4 flex justify-between items-center z-20 pointer-events-none">
-          <div className="brand-font text-amber-500/50 text-xl font-bold pointer-events-auto select-none">
-            达芬奇密码 <span className="text-xs text-slate-600 ml-2 border border-slate-700 px-2 py-0.5 rounded-full">{{easy: '初级', medium: '中级', hard: '高级'}[gameState.difficulty]}</span>
+          <div className="brand-font text-amber-500/50 text-xl font-bold pointer-events-auto select-none flex items-center gap-4">
+            达芬奇密码 
+            <span className="text-xs text-slate-600 border border-slate-700 px-2 py-0.5 rounded-full capitalize">
+              {gameState.difficulty === 'easy' ? '初级' : gameState.difficulty === 'medium' ? '中级' : '高级'}
+            </span>
           </div>
+          
           <div className="flex items-center gap-4 pointer-events-auto">
+             
+             {/* Timer Display */}
+             {!gameState.winner && gameState.turn === 'player' && (
+               <div className={`
+                 flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-sm transition-all animate-fadeIn
+                 ${timeLeft <= 10 ? 'bg-red-900/40 border-red-500 text-red-100 animate-pulse' : 'bg-slate-900/40 border-slate-600 text-slate-300'}
+               `}>
+                 <Timer size={16} className={timeLeft <= 5 ? 'animate-spin' : ''} />
+                 <span className="font-mono font-bold w-6 text-center">{timeLeft}s</span>
+               </div>
+             )}
+
+             {userProfile && (
+               <div className="hidden md:flex items-center gap-3 bg-slate-900/60 pl-2 pr-4 py-1.5 rounded-full border border-slate-700/50 backdrop-blur-sm">
+                  <div 
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-inner"
+                    style={generateAvatarStyle(userProfile.username)}
+                  >
+                    {userProfile.username.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex flex-col leading-none">
+                    <span className="text-xs font-bold text-slate-300">{userProfile.username}</span>
+                    <span className="text-[10px] text-slate-500">胜率: {userProfile.matchesPlayed > 0 ? Math.round((userProfile.wins / userProfile.matchesPlayed) * 100) : 0}%</span>
+                  </div>
+               </div>
+             )}
+
              <div className="bg-slate-900/80 px-4 py-2 rounded-full border border-slate-700 text-sm font-mono text-slate-400">
                剩余牌数: {gameState.deck.length}
              </div>
@@ -536,7 +800,7 @@ const App: React.FC = () => {
              <div className="max-w-md text-slate-300 bg-slate-800 p-6 rounded-xl border border-slate-600 shadow-2xl">
                 <h3 className="text-xl text-amber-500 font-bold mb-4">游戏法则</h3>
                 <ul className="list-disc pl-5 space-y-2 text-sm">
-                   <li><strong className="text-white">目标:</strong> 揭示对手的所有手牌。</li>
+                   <li><strong className="text-white">限时:</strong> 玩家回合有30秒思考时间，超时自动判负（暴露手牌）。</li>
                    <li><strong className="text-white">排序:</strong> 牌按 0-11 排序。</li>
                    <li><strong className="text-white">特殊牌 "-":</strong> 摸到时可自由插入手牌任意位置。</li>
                    <li><strong className="text-white">同值:</strong> 数字相同时，黑牌在左（小），白牌在右。</li>
@@ -562,6 +826,9 @@ const App: React.FC = () => {
                <p className="flex items-center justify-center gap-2 text-indigo-400 text-sm font-semibold opacity-90">
                  <EyeOff size={16} /> 此操作对对手不可见 (AI 不会知道你放哪了)
                </p>
+               <div className="mt-2 text-red-400 text-sm font-mono animate-pulse">
+                 剩余时间: {timeLeft}s
+               </div>
             </div>
 
             {/* The Pending Tile */}
@@ -606,8 +873,8 @@ const App: React.FC = () => {
 
         {/* Game Over Overlay */}
         {gameState.winner && (
-          <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center animate-fadeIn p-4">
-             <div className="text-6xl mb-4">
+          <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center animate-fadeIn p-4 backdrop-blur-sm">
+             <div className="text-6xl mb-4 animate-bounce">
                {gameState.winner === 'player' ? '🏆' : '💀'}
              </div>
              <h2 className={`text-4xl md:text-6xl font-bold mb-2 brand-font ${gameState.winner === 'player' ? 'text-amber-500' : 'text-red-600'}`}>
@@ -616,12 +883,50 @@ const App: React.FC = () => {
              <p className="text-slate-400 text-lg mb-8">
                {gameState.winner === 'player' ? '你证明了自己的智慧。' : 'AI 智胜了你。'}
              </p>
-             <button 
-               onClick={startGame}
-               className="bg-slate-200 text-black hover:bg-white font-bold py-3 px-8 rounded-full flex items-center gap-2 transition-transform hover:scale-105"
-             >
-               <RotateCcw size={20} /> 再玩一次
-             </button>
+             
+             {/* Unlock Prompt */}
+             {gameState.winner === 'player' && userProfile && (
+                (gameState.difficulty === 'easy' && userProfile.unlockedDifficulty === 'medium') ||
+                (gameState.difficulty === 'medium' && userProfile.unlockedDifficulty === 'hard')
+             ) && (
+               <div className="mb-8 p-4 bg-gradient-to-r from-amber-500/20 to-purple-500/20 rounded-xl border border-amber-500/50 text-center max-w-sm">
+                  <p className="text-white font-bold mb-2">🎉 新难度已解锁！</p>
+                  <p className="text-sm text-slate-300">要不要立即挑战更强大的对手？</p>
+                  <button 
+                    onClick={() => {
+                       const nextDiff = gameState.difficulty === 'easy' ? 'medium' : 'hard';
+                       setGameState(prev => ({ ...prev, difficulty: nextDiff }));
+                       startGame();
+                    }}
+                    className="mt-3 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-lg"
+                  >
+                    挑战 {gameState.difficulty === 'easy' ? '中级' : '高级'} 难度
+                  </button>
+               </div>
+             )}
+
+             <div className="flex flex-col md:flex-row gap-4">
+                <button 
+                  onClick={startGame}
+                  className="bg-slate-200 text-black hover:bg-white font-bold py-3 px-8 rounded-full flex items-center justify-center gap-2 transition-transform hover:scale-105"
+                >
+                  <RotateCcw size={20} /> 再玩一次
+                </button>
+                
+                <button 
+                  onClick={resetToDifficulty}
+                  className="bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold py-3 px-8 rounded-full flex items-center justify-center gap-2 transition-transform hover:scale-105 border border-slate-600"
+                >
+                  <Shield size={20} /> 更换难度
+                </button>
+
+                <button 
+                   onClick={resetToMainMenu}
+                   className="bg-slate-900 text-slate-400 hover:text-white font-bold py-3 px-8 rounded-full flex items-center justify-center gap-2 transition-transform hover:scale-105 border border-slate-700"
+                >
+                   <Home size={20} /> 主菜单
+                </button>
+             </div>
           </div>
         )}
 

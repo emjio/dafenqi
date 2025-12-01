@@ -2,6 +2,7 @@
 import { Tile, AiGuessResult, Difficulty, AiProvider } from "../types";
 import { getGeminiMove } from "./geminiService";
 import { getOpenAiMove } from "./openaiService";
+import { getAlgorithmMove } from "./algorithmService";
 import { TOTAL_NUMBERS } from "../utils/gameLogic";
 
 // Define the common interface signature
@@ -35,6 +36,9 @@ export const getAiMove = async (
       break;
     case 'openai':
       moveStrategy = getOpenAiMove;
+      break;
+    case 'algorithm':
+      moveStrategy = getAlgorithmMove;
       break;
     default:
       moveStrategy = getGeminiMove;

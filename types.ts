@@ -14,7 +14,15 @@ export type PlayerType = 'player' | 'ai';
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
-export type AiProvider = 'gemini' | 'openai';
+export type AiProvider = 'gemini' | 'openai' | 'algorithm';
+
+export interface UserProfile {
+  username: string;
+  matchesPlayed: number;
+  wins: number;
+  losses: number;
+  unlockedDifficulty: Difficulty; // 'easy' | 'medium' | 'hard'
+}
 
 export interface GameState {
   playerHand: Tile[];
