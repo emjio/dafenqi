@@ -13,7 +13,7 @@ import { LogPanel } from './components/LogPanel';
 import { SetupScreen } from './components/SetupScreen';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UserSetupModal } from './components/UserSetupModal';
-import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield, Trophy, Lock, Timer, Home, Settings, Clock } from 'lucide-react';
+import { Brain, RotateCcw, Play, CheckCircle2, AlertCircle, HelpCircle, ArrowRightLeft, User, Bot, ArrowDown, Swords, EyeOff, Shield, Trophy, Lock, Timer, Home, Settings, Clock, BarChart3, X, Megaphone } from 'lucide-react';
 
 const INITIAL_HAND_SIZE = 4;
 const TURN_DURATION = 30; // 30 seconds
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [targetTileIndex, setTargetTileIndex] = useState<number | null>(null);
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showTurnNotification, setShowTurnNotification] = useState<{player: PlayerType, show: boolean}>({ player: 'player', show: false });
   
   // --- Timer State ---
@@ -631,8 +632,17 @@ const App: React.FC = () => {
 
   if (gameState.phase === 'setup') {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
-         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow animate-slideDown">
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+         {/* Marquee Banner */}
+         <div className="absolute top-0 left-0 w-full bg-amber-900/80 text-amber-100 text-sm py-2 overflow-hidden z-50 border-b border-amber-600/50 shadow-lg">
+            <div className="animate-marquee flex items-center gap-8">
+              <span className="flex items-center gap-2"><Trophy size={14} className="text-amber-400"/> 本次活动在所有玩家中进行海选，取胜率最高的前16位选手进行对战，以此决出八强、四强和冠亚军。冠军可以获得神秘大奖！</span>
+              <span className="flex items-center gap-2"><Megaphone size={14} className="text-amber-400"/> 全球对战正在进行中...</span>
+              <span className="flex items-center gap-2"><Trophy size={14} className="text-amber-400"/> 本次活动在所有玩家中进行海选，取胜率最高的前16位选手进行对战，以此决出八强、四强和冠亚军。冠军可以获得神秘大奖！</span>
+            </div>
+         </div>
+
+         <h1 className="text-5xl md:text-7xl text-amber-500 font-bold mb-4 text-center brand-font tracking-tighter drop-shadow-glow animate-slideDown mt-12">
             达芬奇密码
          </h1>
          
@@ -789,6 +799,14 @@ const App: React.FC = () => {
                   </div>
                </div>
              )}
+             
+             {/* Leaderboard Button */}
+             <button 
+                onClick={() => setShowLeaderboard(true)}
+                className="bg-slate-900/80 p-2 rounded-full border border-slate-700 text-slate-400 hover:text-amber-500 hover:border-amber-500 transition-colors"
+             >
+                <Trophy size={20} />
+             </button>
 
              <div className="bg-slate-900/80 px-4 py-2 rounded-full border border-slate-700 text-sm font-mono text-slate-400">
                剩余牌数: {gameState.deck.length}
@@ -813,6 +831,34 @@ const App: React.FC = () => {
               </span>
            </div>
         </div>
+
+        {/* Leaderboard Modal */}
+        {showLeaderboard && (
+          <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-6 animate-fadeIn" onClick={() => setShowLeaderboard(false)}>
+             <div className="max-w-sm w-full bg-slate-900 p-8 rounded-xl border border-amber-500/30 shadow-2xl text-center relative overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="absolute -top-10 -right-10 w-32 h-32 bg-amber-500/20 rounded-full blur-3xl"></div>
+                <button 
+                  onClick={() => setShowLeaderboard(false)}
+                  className="absolute top-4 right-4 text-slate-500 hover:text-white"
+                >
+                  <X size={20} />
+                </button>
+                
+                <BarChart3 size={48} className="mx-auto text-amber-500 mb-4" />
+                <h3 className="text-2xl text-white font-bold mb-2 brand-font">排行榜</h3>
+                <p className="text-slate-400 mb-6">即将推出排名系统，敬请期待！</p>
+                <div className="bg-slate-800/50 p-4 rounded-lg text-sm text-slate-500 border border-slate-700/50">
+                  <p>在这里，你将能看到全球顶尖逻辑大师的排名。</p>
+                </div>
+                <button 
+                  onClick={() => setShowLeaderboard(false)}
+                  className="mt-6 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 px-6 rounded-lg w-full transition-colors"
+                >
+                  我知道了
+                </button>
+             </div>
+          </div>
+        )}
 
         {/* Rules Modal Overlay */}
         {showRules && (
